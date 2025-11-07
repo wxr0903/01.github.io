@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>手机WiFi定位</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            overflow: hidden;
+        }
+        
+        .container {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        header {
+            background: rgba(255,255,255,0.95);
+            padding: 15px;
+            text-align: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+        
+        h1 {
+            font-size: 1.4rem;
+            color: #333;
+            margin-bottom: 5px;
+        }
+        
+        .subtitle {
+            font-size: 0.9rem;
+            color: #666;
+        }
+        
+        #map {
+            flex: 1;
+            width: 100%;
+        }
+        
+        .controls {
+            background: white;
+            padding: 15px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .btn {
+            padding: 15px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .btn:active {
+            transform: scale(0.98);
+        }
+        
+        .btn-primary {
+            background: #4299e1;
+            color: white;
+        }
+        
+        .btn-success {
+            background: #48bb78;
+            color: white;
+        }
+        
+        .status-bar {
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 10px 15px;
+            font-size: 0.85rem;
+            display: flex;
+            justify-content: space-between;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 8px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .hidden {
+            display: none;
+        }
+        
+        /* 手机横屏适配 */
+        @media (max-height: 500px) {
+            header {
+                padding: 10px;
+            }
+            
+            h1 {
+                font-size: 1.2rem;
+            }
+            
+            .controls {
+                padding: 10px;
+            }
+            
+            .btn {
+                padding: 12px;
+                font-size: 0.9rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>手机WiFi定位</h1>
+            <p class="subtitle">轻点定位按钮获取您的位置</p>
+        </header>
+        
+        <div class="status-bar">
+            <span id="status">等待定位...</span>
+            <span id="coordinates">-</span>
+        </div>
+        
+        <div id="map"></div>
+        
+        <div class="controls">
+            <button id="locate-btn" class="btn btn-primary">
+                <span class="loading hidden"></span>
+                立即定位
+            </button>
+            <button id="simulate-btn" class="btn btn-success">模拟定位</button>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        // 初始化地图
+        const map = L.map('map').setView([39.9042, 116.4074], 13);
+        
+        // 添加地图图层
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+        
+        // 全局变量
+        let userMarker = null;
+        let accuracyCircle = null;
+        let watchId = null;
+        
+        // DOM元素
+        const locateBtn = document.getElementById('locate-btn');
+        const simulateBtn = document.getElementById('simulate-btn');
+        const statusEl = document.getElementById('status');
+        const coordinatesEl = document.getElementById('coordinates');
+        const loadingEl = document.querySelector('.loading');
+        
+        // 模拟位置数据
+        const mockLocations = [
+            { lat: 39.9042, lng: 116.4074, city: '北京' },
+            { lat: 31.2304, lng: 121.4737, city: '上海' },
+            { lat: 23.1291, lng: 113.2644, city: '广州' },
+            { lat: 30.5728, lng: 104.0668, city: '成都' }
+        ];
+        
+        // 更新状态显示
+        function updateStatus(status, lat, lng, accuracy) {
+            statusEl.textContent = status;
+            if (lat && lng) {
+                coordinatesEl.textContent = `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+            } else {
+                coordinatesEl.textContent = '-';
+            }
+        }
+        
+        // 在地图上更新用户位置
+        function updateUserLocation(lat, lng, accuracy) {
+            // 移除之前的标记和圆圈
+            if (userMarker) {
+                map.removeLayer(userMarker);
+            }
+            if (accuracyCircle) {
+                map.removeLayer(accuracyCircle);
+            }
+            
+            // 添加新的位置标记
+            userMarker = L.marker([lat, lng]).addTo(map)
+                .bindPopup(`<b>您的位置</b><br>精度: ${accuracy}米`)
+                .openPopup();
+            
+            // 添加精度圆圈
+            accuracyCircle = L.circle([lat, lng], {
+                color: '#4299e1',
+                fillColor: '#4299e1',
+                fillOpacity: 0.1,
+                radius: accuracy
+            }).addTo(map);
+            
+            // 调整地图视图
+            map.setView([lat, lng], 16);
+        }
+        
+        // 开始实时定位
+        function startLocationTracking() {
+            loadingEl.classList.remove('hidden');
+            locateBtn.disabled = true;
+            updateStatus('定位中...');
+            
+            if ("geolocation" in navigator) {
+                // 停止之前的定位监听
+                if (watchId) {
+                    navigator.geolocation.clearWatch(watchId);
+                }
+                
+                // 开始新的定位监听
+                watchId = navigator.geolocation.watchPosition(
+                    position => {
+                        const lat = position.coords.latitude;
+                        const lng = position.coords.longitude;
+                        const accuracy = position.coords.accuracy;
+                        
+                        updateStatus('定位成功', lat, lng, accuracy);
+                        updateUserLocation(lat, lng, accuracy);
+                        
+                        loadingEl.classList.add('hidden');
+                        locateBtn.disabled = false;
+                        locateBtn.textContent = '跟踪中';
+                    },
+                    error => {
+                        let errorMessage = '定位失败: ';
+                        switch(error.code) {
+                            case error.PERMISSION_DENIED:
+                                errorMessage += "请允许位置权限";
+                                break;
+                            case error.POSITION_UNAVAILABLE:
+                                errorMessage += "位置不可用";
+                                break;
+                            case error.TIMEOUT:
+                                errorMessage += "定位超时";
+                                break;
+                            default:
+                                errorMessage += "未知错误";
+                                break;
+                        }
+                        
+                        updateStatus(errorMessage);
+                        loadingEl.classList.add('hidden');
+                        locateBtn.disabled = false;
+                        locateBtn.textContent = '立即定位';
+                        
+                        alert(`${errorMessage}，点击"模拟定位"进行测试。`);
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 15000,
+                        maximumAge: 30000
+                    }
+                );
+            } else {
+                updateStatus('浏览器不支持定位');
+                loadingEl.classList.add('hidden');
+                locateBtn.disabled = false;
+                alert('您的浏览器不支持定位功能，请使用模拟定位。');
+            }
+        }
+        
+        // 使用模拟位置
+        function useMockLocation() {
+            const randomLocation = mockLocations[Math.floor(Math.random() * mockLocations.length)];
+            const accuracy = Math.floor(Math.random() * 50) + 30;
+            
+            updateStatus('模拟位置', randomLocation.lat, randomLocation.lng, accuracy);
+            updateUserLocation(randomLocation.lat, randomLocation.lng, accuracy);
+            
+            // 停止实时定位
+            if (watchId) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
+            
+            locateBtn.textContent = '立即定位';
+        }
+        
+        // 事件监听
+        locateBtn.addEventListener('click', startLocationTracking);
+        simulateBtn.addEventListener('click', useMockLocation);
+        
+        // 页面加载时尝试定位
+        setTimeout(() => {
+            if (confirm('是否立即开始定位？')) {
+                startLocationTracking();
+            }
+        }, 1000);
+    </script>
+</body>
+</html>
